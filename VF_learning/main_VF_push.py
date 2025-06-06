@@ -26,7 +26,7 @@ os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "True"
 # ====================================
 #            Load Dataset
 # ====================================
-data_path = 'results/observations.npy'
+data_path = 'results/observations_push.npy'
 data = np.load(data_path)
 print("Dataset loaded:", data.shape)
 
@@ -37,7 +37,38 @@ next_states = data[:, :, input_dim:2 * input_dim]
 dones = data[:, :, -2]
 capt_p = data[:, :, -1]
 
-""" print(dones[13,:])
+def fill_padding_with_last_valid(states, next_states, dones, capt_p):
+    states_filled = np.copy(states)
+    next_states_filled = np.copy(next_states)
+    dones_filled = np.copy(dones)
+    capt_p_filled = np.copy(capt_p)
+
+    num_episodes, T, _ = states.shape
+
+    for ep in range(num_episodes):
+        # Trova primo indice dove compare uno stato di solo zeri
+        zero_mask = np.all(states[ep] == 0, axis=1)
+        if not np.any(zero_mask):
+            continue  # nessun padding, salta episodio
+
+        first_zero_idx = np.argmax(zero_mask)
+
+        # Prendi ultimo stato valido
+        last_valid_state = states[ep, first_zero_idx - 1]
+        
+        for t in range(first_zero_idx, T):
+            states_filled[ep, t] = last_valid_state
+            next_states_filled[ep, t] = last_valid_state
+            dones_filled[ep, t] = 0
+            capt_p_filled[ep, t] = 1.0
+
+    return states_filled, next_states_filled, dones_filled, capt_p_filled
+
+# Applica
+states, next_states, dones, capt_p = fill_padding_with_last_valid(states, next_states, dones, capt_p)
+
+""" print(capt_p[98,:])
+print(dones[98,:])
 exit() """
 
 """ # Esempio: trova gli indici degli episodi con almeno un 1
@@ -64,6 +95,7 @@ next_states, _, _ = normalize_states(next_states)
 states = jnp.array(states, dtype=jnp.float32)
 next_states = jnp.array(next_states, dtype=jnp.float32)
 dones = jnp.array(dones, dtype=jnp.float32)
+capt_p = jnp.array(capt_p, dtype=jnp.float32)
 
 # ====================================
 #       Define Neural Network
@@ -81,7 +113,8 @@ class ValueNetwork(nn.Module):
         x = nn.LayerNorm()(x)
         x = nn.elu(x)
         # Output initialized to 1 (probability of survival)
-        x = nn.Dense(1, kernel_init=nn.initializers.zeros, bias_init=nn.initializers.ones)(x)
+        # x = nn.Dense(1, kernel_init=nn.initializers.zeros, bias_init=nn.initializers.ones)(x)
+        x = nn.Dense(1)(x)
         return x.squeeze(-1)
     
 """ class ValueNetwork(nn.Module):
@@ -132,16 +165,25 @@ state = TrainState.create(apply_fn=model.apply, params=params, tx=optimizer)
 # ====================================
 #           Loss Function
 # ====================================
-def loss_fn(params, batch_states, batch_next_states, batch_dones, target_params):
+""" def loss_fn(params, batch_states, batch_next_states, batch_dones, target_params):
     V_s = model.apply(params, batch_states)
     V_next = jax.lax.stop_gradient(model.apply(target_params, batch_next_states))
     indicators = 1.0 - batch_dones
     target = indicators * V_next
+    return jnp.mean(jnp.square(V_s - target)) """
+
+def loss_fn(params, batch_states, batch_next_states, batch_dones, batch_cp, target_params):
+    V_s = model.apply(params, batch_states)
+    V_next = jax.lax.stop_gradient(model.apply(target_params, batch_next_states))
+    indicators = 1.0 - batch_dones
+    target = indicators * ((1-batch_cp)*V_next + batch_cp)
+    # jax.debug.print("target: {x}", x=target)
+    # target = indicators * V_next
     return jnp.mean(jnp.square(V_s - target))
 
 @jax.jit
-def train_step(state, batch_states, batch_next_states, batch_dones, target_params):
-    loss, grads = jax.value_and_grad(loss_fn)(state.params, batch_states, batch_next_states, batch_dones, target_params)
+def train_step(state, batch_states, batch_next_states, batch_dones, batch_cp, target_params):
+    loss, grads = jax.value_and_grad(loss_fn)(state.params, batch_states, batch_next_states, batch_dones, batch_cp, target_params)
     state = state.apply_gradients(grads=grads)
     return state, loss
 
@@ -155,7 +197,7 @@ def update_target_params(target_params, params, tau):
 def closest_power_of_2(n):
     return 2 ** (n.bit_length() - 1)
 
-def get_batches(states, next_states, dones, batch_size, rng):
+def get_batches(states, next_states, dones, capt_p, batch_size, rng):
     batch_size = closest_power_of_2(batch_size)
     num_episodes, num_steps, _ = states.shape
     episodes_per_batch = math.ceil(batch_size / num_steps)
@@ -169,7 +211,8 @@ def get_batches(states, next_states, dones, batch_size, rng):
         s = states[idx].reshape(-1, states.shape[-1])[:batch_size]
         ns = next_states[idx].reshape(-1, next_states.shape[-1])[:batch_size]
         d = dones[idx].reshape(-1)[:batch_size]
-        return s, ns, d
+        cp = capt_p[idx].reshape(-1)[:batch_size]
+        return s, ns, d, cp
 
     batches = jax.vmap(extract)(indices)
     return batches, rng
@@ -177,7 +220,7 @@ def get_batches(states, next_states, dones, batch_size, rng):
 # ====================================
 #           Training Loop
 # ====================================
-epochs = 30000
+epochs = 10000
 batch_size = 1024
 rng = jax.random.PRNGKey(int(time.time()))
 losses, min_losses, max_losses = [], [], []
@@ -186,13 +229,13 @@ with tqdm(range(epochs), desc="Epoch") as pbar:
     for epoch in pbar:
         start_time = time.time()
         rng, subkey = jax.random.split(rng)
-        batches, rng = get_batches(states, next_states, dones, batch_size, subkey)
+        batches, rng = get_batches(states, next_states, dones, capt_p, batch_size, subkey)
 
         epoch_loss = 0
         batch_losses = []
 
-        for batch_states, batch_next_states, batch_dones in zip(*batches):
-            state, loss = train_step(state, batch_states, batch_next_states, batch_dones, target_params)
+        for batch_states, batch_next_states, batch_dones, batch_cp in zip(*batches):
+            state, loss = train_step(state, batch_states, batch_next_states, batch_dones, batch_cp, target_params)
             target_params = update_target_params(target_params, state.params, tau)
             epoch_loss += loss
             batch_losses.append(loss)
@@ -217,7 +260,7 @@ sample_state = states[0, 0, :]
 v_est = model.apply(state.params, sample_state)
 print(f"Estimated V(x) (prob. survival) for good state: {v_est.item():.4f}")
 
-sample_state = states[14, 0, :]
+sample_state = states[18, 0, :]
 v_est = model.apply(state.params, sample_state)
 print(f"Estimated V(x) (prob. survival) for bad state: {v_est.item():.4f}")
 
@@ -251,4 +294,7 @@ print(f"Mean V(x): {mean_terminated:.4f}, Std: {std_terminated:.4f}")
 print()
 print(f"Episodes without termination: n = {v_est_non_terminated.shape[0]}")
 print(f"Mean V(x): {mean_non_terminated:.4f}, Std: {std_non_terminated:.4f}")
+
+print("\n===== All V Estimates for Terminated Episodes =====")
+print(v_est_terminated)
 print("=======================================")

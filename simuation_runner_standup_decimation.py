@@ -93,7 +93,7 @@ def run_simulation(config_path='config.yaml', decimation=16):
                     # Scale and process joystick inputs
                     scaled_axes = [scale_axis(i, axes[i]) for i in range(len(axes))]
                     scaled_axes[0], scaled_axes[1] = scaled_axes[1], scaled_axes[0]
-                    commands = np.array(3*scaled_axes)
+                    commands = np.array(scaled_axes)
 
                     # Apply deadzone threshold
                     threshold = 0.05
@@ -144,7 +144,7 @@ def run_simulation(config_path='config.yaml', decimation=16):
 
             # Apply torques and step simulation
             # Aggiungi rumore gaussiano alle torques
-            noise_std = 20
+            noise_std = 15
             noise = np.random.normal(0, noise_std, size=torques.shape)
             noisy_torques = torques + noise
             

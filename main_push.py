@@ -11,7 +11,7 @@ from utils import scale_axis, swap_legs, clip_torques_in_groups, quat_rotate_inv
 # === Thresholds and constants ===
 INCLINATION_THRESHOLD = 45.0  # degrees
 FALL_HEIGHT_THRESHOLD = 0.2   # meters
-CP_SAFE_RADIUS = 0.15         # meters
+CP_SAFE_RADIUS = 0.05         # meters
 G = 9.81
 
 def compute_capture_point(pos, vel, height):
@@ -57,6 +57,11 @@ def run_single_simulation(config, actor_network, decimation=16, max_steps=2000, 
     obs_tp1_ = []
 
     for step in range(max_steps):
+
+        if step == warmup_steps - 5:
+            data.qvel[0] += np.random.uniform(-2.0, 3.0)  # Push in x
+            data.qvel[1] += np.random.uniform(-1.5,1.5)  # Push in y
+
         if step == warmup_steps:
             commands = np.zeros(3)
 
@@ -93,7 +98,7 @@ def run_single_simulation(config, actor_network, decimation=16, max_steps=2000, 
         torques = swap_legs(torques)
 
         # Apply noise only after warmup
-        if step >= warmup_steps-100:
+        if step >= warmup_steps-1:
             noise = np.random.normal(0, noise_std, size=torques.shape)
             torques += noise
 
@@ -111,11 +116,12 @@ def run_single_simulation(config, actor_network, decimation=16, max_steps=2000, 
             fallen_flag = 1
 
         base_pos = qpos_after[:2].copy()
-        base_vel = data.qvel[3:5].copy()
+        base_vel = data.qvel[:2].copy()
         z_after = qpos_after[2]
         cp = compute_capture_point(base_pos, base_vel, z_after)
         cp_local = cp - base_pos
-        if np.linalg.norm(cp_local) < CP_SAFE_RADIUS and step > warmup_steps + 20 and fallen_flag == 0:
+
+        if np.linalg.norm(cp_local) < CP_SAFE_RADIUS and step >= warmup_steps and fallen_flag == 0: # and inclination_after < INCLINATION_THRESHOLD/2:
             capture_flag = 1
 
         if step % decimation == 0:
@@ -124,7 +130,24 @@ def run_single_simulation(config, actor_network, decimation=16, max_steps=2000, 
                 grav_tens
             )[0].cpu().numpy()
 
-            vel_tp1 = data.qvel[:6].copy()
+            # vel_tp1 = data.qvel[:6].copy()
+
+            body_lin_vel_global = data.qvel[:3].copy()
+            body_ang_vel_global = data.qvel[3:6].copy()
+
+            # Costruisci il quaternione [x, y, z, w] come richiesto da quat_rotate_inverse
+            quat_tp1 = torch.tensor(
+                [[body_quat_after[1], body_quat_after[2], body_quat_after[3], body_quat_after[0]]],
+                dtype=torch.double, device='cuda:0'
+            )
+
+            body_lin_vel_tensor = torch.tensor(
+                np.array(body_lin_vel_global)[None],  # shape (1, 3)
+                dtype=torch.double, device='cuda:0'
+            )
+            body_lin_vel_local = quat_rotate_inverse(quat_tp1, body_lin_vel_tensor)[0].cpu().numpy()
+            vel_tp1 = np.concatenate([body_lin_vel_local, body_ang_vel_global])
+
             joint_pos_tp1 = swap_legs(qpos_after[7:].copy())
             joint_vel_tp1 = swap_legs(data.qvel[6:].copy())
 
@@ -140,10 +163,13 @@ def run_single_simulation(config, actor_network, decimation=16, max_steps=2000, 
             cp_flag = float(capture_flag)
 
             full_obs = np.concatenate([obs_t_, obs_tp1_, [done_flag, cp_flag]])
-            # print("full_obs shape:", full_obs.shape)
             
             if step >= warmup_steps:
                 observations.append(full_obs)
+
+            # If capture point is OK, then terminate the episode
+            if cp_flag == 1:
+                break
 
             obs_t_ = obs_tp1_
 
@@ -177,7 +203,7 @@ def run_batch_simulations(n_episodes=100, save_path="results", config_path="conf
 
     stats = np.array(stats, dtype=int)
 
-    np.save(os.path.join(save_path, "observations.npy"), padded_obs)
+    np.save(os.path.join(save_path, "observations_push.npy"), padded_obs)
     # np.save(os.path.join(save_path, "episode_stats.npy"), stats)
 
     print(f"Episodi completati: {n_episodes}")
@@ -189,4 +215,4 @@ def run_batch_simulations(n_episodes=100, save_path="results", config_path="conf
 
 
 if __name__ == "__main__":
-    run_batch_simulations(n_episodes=100, save_path="results", noise_std=30.0)
+    run_batch_simulations(n_episodes=100, save_path="results", noise_std=15.0)

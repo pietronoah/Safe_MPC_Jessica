@@ -21,7 +21,7 @@ def compute_capture_point(pos, vel, height):
 def check_fallen(qpos, inclination_deg):
     return inclination_deg > INCLINATION_THRESHOLD or qpos[2] < FALL_HEIGHT_THRESHOLD
 
-def run_single_simulation(config, actor_network, decimation=16, max_steps=2000, noise_std=1.0, warmup_time=1.0, seed=None):
+def run_single_simulation(config, actor_network, decimation=16, max_steps=2000, noise_std=1.0, warmup_time=2.0, seed=None):
     timestep = 0.002 # 500Hz  # config['simulation']['timestep_simulation']
     default_joint_angles = np.array(config['robot']['default_joint_angles'])
     kp_custom = np.array(config['robot']['kp_custom'])
@@ -52,9 +52,6 @@ def run_single_simulation(config, actor_network, decimation=16, max_steps=2000, 
     fallen_flag = 0
     capture_flag = 0
     observations = []
-
-    obs_t_ = []
-    obs_tp1_ = []
 
     for step in range(max_steps):
         if step == warmup_steps:
@@ -97,6 +94,22 @@ def run_single_simulation(config, actor_network, decimation=16, max_steps=2000, 
             noise = np.random.normal(0, noise_std, size=torques.shape)
             torques += noise
 
+        # === obs_t ===
+        if step >= warmup_steps:
+            z_t = data.qpos[2]
+            gravity_proj_t = gravity_body[0].cpu().numpy()
+            angular_vel_t = data.qvel[3:6].copy()
+            joint_pos_t = joint_angles
+            joint_vel_t = joint_velocities
+
+            obs_t = np.concatenate((
+                np.array([z_t], dtype=np.float32),
+                gravity_proj_t.astype(np.float32),
+                angular_vel_t.astype(np.float32),
+                joint_pos_t.astype(np.float32),
+                joint_vel_t.astype(np.float32)
+            ))
+
         # === Step sim ===
         torques_noisy = clip_torques_in_groups(torques)
         data.ctrl[:] = torques_noisy
@@ -111,27 +124,28 @@ def run_single_simulation(config, actor_network, decimation=16, max_steps=2000, 
             fallen_flag = 1
 
         base_pos = qpos_after[:2].copy()
-        base_vel = data.qvel[3:5].copy()
+        base_vel = data.qvel[:2].copy() # data.qvel[3:5].copy()
         z_after = qpos_after[2]
         cp = compute_capture_point(base_pos, base_vel, z_after)
         cp_local = cp - base_pos
         if np.linalg.norm(cp_local) < CP_SAFE_RADIUS and step > warmup_steps + 20 and fallen_flag == 0:
             capture_flag = 1
 
-        if step % decimation == 0:
+        # === obs_t+1 ===
+        if step >= warmup_steps:
             gravity_proj_tp1 = quat_rotate_inverse(
                 torch.tensor([body_quat_after[1], body_quat_after[2], body_quat_after[3], body_quat_after[0]], device='cuda:0', dtype=torch.double).unsqueeze(0),
                 grav_tens
             )[0].cpu().numpy()
 
-            vel_tp1 = data.qvel[:6].copy()
-            joint_pos_tp1 = swap_legs(qpos_after[7:].copy())
+            angular_vel_tp1 = data.qvel[3:6].copy()
+            joint_pos_tp1 = swap_legs(data.qpos[7:].copy())
             joint_vel_tp1 = swap_legs(data.qvel[6:].copy())
 
-            obs_tp1_ = np.concatenate((
+            obs_tp1 = np.concatenate((
                 np.array([z_after], dtype=np.float32),
                 gravity_proj_tp1.astype(np.float32),
-                vel_tp1.astype(np.float32),
+                angular_vel_tp1.astype(np.float32),
                 joint_pos_tp1.astype(np.float32),
                 joint_vel_tp1.astype(np.float32)
             ))
@@ -139,13 +153,8 @@ def run_single_simulation(config, actor_network, decimation=16, max_steps=2000, 
             done_flag = float(fallen_flag)
             cp_flag = float(capture_flag)
 
-            full_obs = np.concatenate([obs_t_, obs_tp1_, [done_flag, cp_flag]])
-            # print("full_obs shape:", full_obs.shape)
-            
-            if step >= warmup_steps:
-                observations.append(full_obs)
-
-            obs_t_ = obs_tp1_
+            full_obs = np.concatenate([obs_t, obs_tp1, [done_flag, cp_flag]])
+            observations.append(full_obs)
 
     return np.array(observations), fallen_flag, capture_flag
 
@@ -183,10 +192,9 @@ def run_batch_simulations(n_episodes=100, save_path="results", config_path="conf
     print(f"Episodi completati: {n_episodes}")
     print(f"Caduti: {np.sum(stats[:, 0])}, CP raggiunto: {np.sum(stats[:, 1])}")
     print(f"Dati salvati in: {save_path}/observations.npy")
-    print(f"Shape of observations: {padded_obs.shape}")
 
     return all_obs, stats # padded_obs, stats
 
 
 if __name__ == "__main__":
-    run_batch_simulations(n_episodes=100, save_path="results", noise_std=30.0)
+    run_batch_simulations(n_episodes=20, save_path="results", noise_std=30.0)
