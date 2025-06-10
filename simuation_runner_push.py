@@ -19,7 +19,7 @@ import os
 
 os.environ["XLA_FLAGS"] = os.environ.get("XLA_FLAGS", "") + " --xla_gpu_triton_gemm_any=True"
 os.environ["CUDA_VISIBLE_DEVICES"] = "0"
-os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "True"
+os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "False"
 
 class CriticNetwork(nn.Module):
     @nn.compact
@@ -58,8 +58,6 @@ def normalize_inputs(obss, mean, std):
 @jax.jit
 def critic_inference(params, obs):
     return critic_model.apply(params, obs)
-
-
 
 # Initialize pygame and the joystick module
 pygame.init()
@@ -117,7 +115,8 @@ def run_simulation(config_path='config.yaml', decimation=10):
     with mujoco.viewer.launch_passive(model, data) as viewer:
         while viewer.is_running():
             if timecounter % 1000 == 0 and timecounter > 10:
-                data.qvel[1] = 1.0
+                data.qvel[1] += 5.0
+                print("-------------------------------- ROBOT PUSHED -------------------------------- ")
 
             timecounter += 1
             step_start = time.time()
@@ -196,8 +195,7 @@ def run_simulation(config_path='config.yaml', decimation=10):
                     torques = clip_torques_in_groups(torques)
 
             # Apply torques and step simulation
-            # Aggiungi rumore gaussiano alle torques
-            noise_std = 15
+            noise_std = 0.0 # 15
             noise = np.random.normal(0, noise_std, size=torques.shape)
             noisy_torques = torques + noise
             
@@ -240,10 +238,6 @@ def run_simulation(config_path='config.yaml', decimation=10):
             else:
                 print(f"\033[91mV_safe: {V_safe:.4f}\033[0m")
         
-            # -------------------------------
-            # Calculate if safe
-            # -------------------------------
-
             # Update viewer
             with viewer.lock():
                 viewer.opt.flags[mujoco.mjtVisFlag.mjVIS_CONTACTPOINT] = int(data.time % 2)
