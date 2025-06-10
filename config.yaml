@@ -1,5 +1,5 @@
 simulation:
-  timestep_simulation: 0.00125
+  timestep_simulation: 0.002 # 0.00125
   #timestep_policy: 0.005
   framerate: 60
   duration: 7

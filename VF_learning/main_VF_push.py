@@ -26,8 +26,11 @@ os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "True"
 # ====================================
 #            Load Dataset
 # ====================================
-data_path = 'results/observations_push.npy'
+data_path = 'results/observations_push_small.npy'
 data = np.load(data_path)
+
+# data = data[:1000,:,:]
+
 print("Dataset loaded:", data.shape)
 
 input_dim = 34
@@ -113,8 +116,8 @@ class ValueNetwork(nn.Module):
         x = nn.LayerNorm()(x)
         x = nn.elu(x)
         # Output initialized to 1 (probability of survival)
-        # x = nn.Dense(1, kernel_init=nn.initializers.zeros, bias_init=nn.initializers.ones)(x)
-        x = nn.Dense(1)(x)
+        x = nn.Dense(1, kernel_init=nn.initializers.zeros, bias_init=nn.initializers.ones)(x)
+        # x = nn.Dense(1)(x)
         return x.squeeze(-1)
     
 """ class ValueNetwork(nn.Module):
@@ -136,8 +139,8 @@ key = jax.random.PRNGKey(42)
 model = ValueNetwork()
 params = model.init(key, jnp.ones((1, input_dim)))
 
-model_path = 'VF_models/VF_safe_MPC.pkl'
-load_parameters = False
+model_path = 'VF_models/VF_safe_MPC_small.pkl'
+load_parameters = True
 
 if load_parameters:
     try:
@@ -154,7 +157,7 @@ target_params = copy.deepcopy(params)
 #       Optimizer & Train State
 # ====================================
 learning_rate = 3e-4
-tau = 0.005
+tau = 0.01
 optimizer = optax.adam(learning_rate)
 
 class TrainState(train_state.TrainState):
@@ -165,12 +168,18 @@ state = TrainState.create(apply_fn=model.apply, params=params, tx=optimizer)
 # ====================================
 #           Loss Function
 # ====================================
-""" def loss_fn(params, batch_states, batch_next_states, batch_dones, target_params):
+""" def loss_fn(params, batch_states, batch_next_states, batch_dones, batch_cp, target_params):
+    # compute mask: 1 se stato valido, 0 se padding
+    valid_mask = jnp.any(batch_states != 0, axis=1).astype(jnp.float32)
+
+    # usual target
     V_s = model.apply(params, batch_states)
     V_next = jax.lax.stop_gradient(model.apply(target_params, batch_next_states))
     indicators = 1.0 - batch_dones
-    target = indicators * V_next
-    return jnp.mean(jnp.square(V_s - target)) """
+    target = indicators * ((1 - batch_cp) * V_next + batch_cp)
+
+    loss = jnp.square(V_s - target) * valid_mask
+    return jnp.sum(loss) / jnp.sum(valid_mask) """
 
 def loss_fn(params, batch_states, batch_next_states, batch_dones, batch_cp, target_params):
     V_s = model.apply(params, batch_states)
@@ -220,8 +229,8 @@ def get_batches(states, next_states, dones, capt_p, batch_size, rng):
 # ====================================
 #           Training Loop
 # ====================================
-epochs = 10000
-batch_size = 1024
+epochs = 0
+batch_size = 512
 rng = jax.random.PRNGKey(int(time.time()))
 losses, min_losses, max_losses = [], [], []
 
@@ -260,7 +269,7 @@ sample_state = states[0, 0, :]
 v_est = model.apply(state.params, sample_state)
 print(f"Estimated V(x) (prob. survival) for good state: {v_est.item():.4f}")
 
-sample_state = states[18, 0, :]
+sample_state = states[45, 0, :]
 v_est = model.apply(state.params, sample_state)
 print(f"Estimated V(x) (prob. survival) for bad state: {v_est.item():.4f}")
 

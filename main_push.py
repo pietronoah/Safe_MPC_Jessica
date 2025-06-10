@@ -203,7 +203,7 @@ def run_batch_simulations(n_episodes=100, save_path="results", config_path="conf
 
     stats = np.array(stats, dtype=int)
 
-    np.save(os.path.join(save_path, "observations_push.npy"), padded_obs)
+    np.save(os.path.join(save_path, "observations_push_small.npy"), padded_obs)
     # np.save(os.path.join(save_path, "episode_stats.npy"), stats)
 
     print(f"Episodi completati: {n_episodes}")
@@ -215,4 +215,4 @@ def run_batch_simulations(n_episodes=100, save_path="results", config_path="conf
 
 
 if __name__ == "__main__":
-    run_batch_simulations(n_episodes=100, save_path="results", noise_std=15.0)
+    run_batch_simulations(n_episodes=1000, save_path="results", noise_std=10.0)
