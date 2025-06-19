@@ -26,14 +26,12 @@ os.environ["XLA_PYTHON_CLIENT_PREALLOCATE"] = "True"
 # ====================================
 #            Load Dataset
 # ====================================
-data_path = 'results/observations_push_small.npy'
+data_path = 'results/observations_sensor_based.npy'
 data = np.load(data_path)
-
-# data = data[:1000,:,:]
 
 print("Dataset loaded:", data.shape)
 
-input_dim = 34
+input_dim = 30
 
 states = data[:, :, :input_dim]
 next_states = data[:, :, input_dim:2 * input_dim]
@@ -120,17 +118,6 @@ class ValueNetwork(nn.Module):
         # x = nn.Dense(1)(x)
         return x.squeeze(-1)
     
-""" class ValueNetwork(nn.Module):
-    @nn.compact
-    def __call__(self, x):
-        x = nn.Dense(512)(x)
-        x = nn.elu(x)
-        x = nn.Dense(256)(x)
-        x = nn.elu(x)
-        x = nn.Dense(128)(x)
-        x = nn.elu(x)
-        x = nn.Dense(1)(x)
-        return x.squeeze(-1) """
 
 # ====================================
 #    Initialize / Load Model Params
@@ -139,8 +126,8 @@ key = jax.random.PRNGKey(42)
 model = ValueNetwork()
 params = model.init(key, jnp.ones((1, input_dim)))
 
-model_path = 'VF_models/VF_safe_MPC_small.pkl'
-load_parameters = True
+model_path = 'VF_models/VF_safe_MPC_sensor_based.pkl'
+load_parameters = False
 
 if load_parameters:
     try:
@@ -229,7 +216,7 @@ def get_batches(states, next_states, dones, capt_p, batch_size, rng):
 # ====================================
 #           Training Loop
 # ====================================
-epochs = 0
+epochs = 5000
 batch_size = 512
 rng = jax.random.PRNGKey(int(time.time()))
 losses, min_losses, max_losses = [], [], []
@@ -265,11 +252,11 @@ print("Model saved at", model_path)
 # ====================================
 #       Value Estimate Example
 # ====================================
-sample_state = states[0, 0, :]
+sample_state = states[5, 0, :]
 v_est = model.apply(state.params, sample_state)
 print(f"Estimated V(x) (prob. survival) for good state: {v_est.item():.4f}")
 
-sample_state = states[45, 0, :]
+sample_state = states[239, 0, :]
 v_est = model.apply(state.params, sample_state)
 print(f"Estimated V(x) (prob. survival) for bad state: {v_est.item():.4f}")
 
