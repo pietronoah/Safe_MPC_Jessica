@@ -4,7 +4,7 @@ import time
 import numpy as np
 from scipy.spatial.transform import Rotation as R
 import torch
-from config_loader.config_loader import load_config, load_actor_network
+from config_loader.policy_loader import load_config, load_actor_network
 import pygame
 
 # Import the utility functions

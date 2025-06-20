@@ -28,4 +28,5 @@ scaling:
   actions: 1.0
 
 paths:
-  checkpoint_path: nn/SoloTerrain.pth # friction_model_2.pth # friction_model_2.pth # friction_model_1.pth # test_steps.pth # SoloTerrain.pth # nn/SoloTerrain_lower_frequency.pth
+  policy_path: nn/nominal_policy.pth
+  safety_vf_path: nn/safety_VF.pkl
